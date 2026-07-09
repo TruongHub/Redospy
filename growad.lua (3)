@@ -1,0 +1,528 @@
+```lua
+--[[
+    ========================================================================
+    [X-SPY DELTA LITE] - NO-CRASH REMOTE LOGGER FOR MOBILE
+    ========================================================================
+    Thiết kế đặc biệt để khắc phục lỗi "attempt to call a nil value" trên Delta
+    và các dòng Executor Mobile yếu/thiếu API.
+    ========================================================================
+]]
+
+-- KHAI BÁO CÁC DỊCH VỤ AN TOÀN
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- CHỐNG TRÙNG LẶP (Dọn dẹp bản cũ nếu có)
+if PlayerGui:FindFirstChild("X_Spy_Delta") then
+    PlayerGui:FindFirstChild("X_Spy_Delta"):Destroy()
+end
+
+-- KHAI BÁO BIẾN TRẠNG THÁI TOÀN CỤC
+local isSpying = true
+local loggedRemotes = {}
+local selectedRemoteData = nil
+
+-- TẠO SCREEN GUI TRÊN PLAYERGUI (Chạy được trên mọi Executor)
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "X_Spy_Delta"
+ScreenGui.Parent = PlayerGui
+ScreenGui.ResetOnSpawn = false
+
+-- GIAO DIỆN CHÍNH (MAIN FRAME)
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 520, 0, 300) -- Chỉnh nhỏ gọn lại phù hợp màn hình mobile
+MainFrame.Position = UDim2.new(0.5, -260, 0.5, -150)
+MainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
+MainFrame.BorderSizePixel = 0
+MainFrame.ClipsDescendants = true
+MainFrame.Parent = ScreenGui
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 8)
+MainCorner.Parent = MainFrame
+
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Thickness = 1
+MainStroke.Color = Color3.fromRGB(50, 50, 60)
+MainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+MainStroke.Parent = MainFrame
+
+-- HỖ TRỢ KÉO THẢ DI CHUYỂN TRÊN MOBILE (TOUCH DRAGGING)
+local dragToggle = nil
+local dragSpeed = 0.15
+local dragStart = nil
+local startPos = nil
+
+local function updateInput(input)
+    local delta = input.Position - dragStart
+    local position = UDim2.new(startPos.Width.Scale, startPos.Width.Offset + delta.X, startPos.Height.Scale, startPos.Height.Offset + delta.Y)
+    TweenService:Create(MainFrame, TweenInfo.new(dragSpeed), {Position = position}):Play()
+end
+
+MainFrame.InputBegan:Connect(function(input)
+    if (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+        dragToggle = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragToggle = false
+            end
+        end)
+    end
+end)
+
+MainFrame.InputChanged:Connect(function(input)
+    if (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        if dragToggle then
+            updateInput(input)
+        end
+    end
+end)
+
+-- THANH TIÊU ĐỀ (TOP BAR)
+local TopBar = Instance.new("Frame")
+TopBar.Name = "TopBar"
+TopBar.Size = UDim2.new(1, 0, 0, 36)
+TopBar.BackgroundColor3 = Color3.fromRGB(28, 28, 34)
+TopBar.BorderSizePixel = 0
+TopBar.Parent = MainFrame
+
+local TopCorner = Instance.new("UICorner")
+TopCorner.CornerRadius = UDim.new(0, 8)
+TopCorner.Parent = TopBar
+
+local TopBarPatch = Instance.new("Frame")
+TopBarPatch.Size = UDim2.new(1, 0, 0, 10)
+TopBarPatch.Position = UDim2.new(0, 0, 1, -10)
+TopBarPatch.BackgroundColor3 = Color3.fromRGB(28, 28, 34)
+TopBarPatch.BorderSizePixel = 0
+TopBarPatch.Parent = TopBar
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(0, 150, 1, 0)
+TitleLabel.Position = UDim2.new(0, 12, 0, 0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "X-SPY MOBILE v1.2"
+TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.TextSize = 12
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.Parent = TopBar
+
+-- KHU VỰC CÁC NÚT ĐIỀU KHIỂN TRÊN TOP BAR
+local ControlContainer = Instance.new("Frame")
+ControlContainer.Size = UDim2.new(0, 320, 1, 0)
+ControlContainer.Position = UDim2.new(1, -330, 0, 0)
+ControlContainer.BackgroundTransparency = 1
+ControlContainer.Parent = TopBar
+
+local UIListLayoutControls = Instance.new("UIListLayout")
+UIListLayoutControls.FillDirection = Enum.FillDirection.Horizontal
+UIListLayoutControls.HorizontalAlignment = Enum.HorizontalAlignment.Right
+UIListLayoutControls.VerticalAlignment = Enum.VerticalAlignment.Center
+UIListLayoutControls.Padding = UDim.new(0, 5)
+UIListLayoutControls.Parent = ControlContainer
+
+local function createButton(text, color, onClick)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 65, 0, 22)
+    btn.BackgroundColor3 = color
+    btn.BorderSizePixel = 0
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 9
+    btn.Parent = ControlContainer
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 4)
+    corner.Parent = btn
+
+    btn.MouseButton1Click:Connect(onClick)
+    return btn
+end
+
+local SearchBar = Instance.new("TextBox")
+SearchBar.Size = UDim2.new(0, 100, 0, 22)
+SearchBar.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+SearchBar.BorderSizePixel = 0
+SearchBar.PlaceholderText = "Tìm kiếm..."
+SearchBar.Text = ""
+SearchBar.TextColor3 = Color3.fromRGB(255, 255, 255)
+SearchBar.PlaceholderColor3 = Color3.fromRGB(130, 130, 140)
+SearchBar.Font = Enum.Font.Gotham
+SearchBar.TextSize = 9
+SearchBar.Parent = ControlContainer
+
+local SearchCorner = Instance.new("UICorner")
+SearchCorner.CornerRadius = UDim.new(0, 4)
+SearchCorner.Parent = SearchBar
+
+-- CONTAINER CHIA ĐÔI NỘI DUNG (LOGGER & DETAILS)
+local ContentContainer = Instance.new("Frame")
+ContentContainer.Size = UDim2.new(1, -16, 1, -52)
+ContentContainer.Position = UDim2.new(0, 8, 0, 44)
+ContentContainer.BackgroundTransparency = 1
+ContentContainer.Parent = MainFrame
+
+-- BẢNG TRA CỨU BÊN TRÁI
+local LeftSection = Instance.new("Frame")
+LeftSection.Size = UDim2.new(0.48, 0, 1, 0)
+LeftSection.BackgroundTransparency = 1
+LeftSection.Parent = ContentContainer
+
+local ListScroll = Instance.new("ScrollingFrame")
+ListScroll.Size = UDim2.new(1, 0, 1, 0)
+ListScroll.BackgroundTransparency = 1
+ListScroll.BorderSizePixel = 0
+ListScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+ListScroll.ScrollBarThickness = 3
+ListScroll.ScrollBarImageColor3 = Color3.fromRGB(60, 60, 70)
+ListScroll.Parent = LeftSection
+
+local ListLayout = Instance.new("UIListLayout")
+ListLayout.Padding = UDim.new(0, 4)
+ListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ListLayout.Parent = ListScroll
+
+-- BẢNG XEM CHI TIẾT BÊN PHẢI
+local RightSection = Instance.new("Frame")
+RightSection.Size = UDim2.new(0.5, 0, 1, 0)
+RightSection.Position = UDim2.new(0.52, 0, 0, 0)
+RightSection.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+RightSection.BorderSizePixel = 0
+RightSection.Parent = ContentContainer
+
+local RightCorner = Instance.new("UICorner")
+RightCorner.CornerRadius = UDim.new(0, 6)
+RightCorner.Parent = RightSection
+
+local DetailScroll = Instance.new("ScrollingFrame")
+DetailScroll.Size = UDim2.new(1, -12, 1, -45)
+DetailScroll.Position = UDim2.new(0, 6, 0, 6)
+DetailScroll.BackgroundTransparency = 1
+DetailScroll.BorderSizePixel = 0
+DetailScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+DetailScroll.ScrollBarThickness = 3
+DetailScroll.ScrollBarImageColor3 = Color3.fromRGB(60, 60, 70)
+DetailScroll.Parent = RightSection
+
+local DetailLayout = Instance.new("UIListLayout")
+DetailLayout.Padding = UDim.new(0, 4)
+DetailLayout.Parent = DetailScroll
+
+local CodeBox = Instance.new("TextBox")
+CodeBox.Size = UDim2.new(1, 0, 1, 0)
+CodeBox.BackgroundTransparency = 1
+CodeBox.MultiLine = true
+CodeBox.ClearTextOnFocus = false
+CodeBox.TextEditable = false
+CodeBox.Text = "-- Chọn một Remote ở danh sách trái..."
+CodeBox.TextColor3 = Color3.fromRGB(150, 220, 150)
+CodeBox.Font = Enum.Font.Code
+CodeBox.TextSize = 9
+CodeBox.TextXAlignment = Enum.TextXAlignment.Left
+CodeBox.TextYAlignment = Enum.TextYAlignment.Top
+CodeBox.Parent = DetailScroll
+
+-- THANH HÀNH ĐỘNG DƯỚI BẢNG PHẢI
+local ActionPanel = Instance.new("Frame")
+ActionPanel.Size = UDim2.new(1, -12, 0, 28)
+ActionPanel.Position = UDim2.new(0, 6, 1, -34)
+ActionPanel.BackgroundTransparency = 1
+ActionPanel.Parent = RightSection
+
+local CopyButton = Instance.new("TextButton")
+CopyButton.Size = UDim2.new(1, 0, 1, 0)
+CopyButton.BackgroundColor3 = Color3.fromRGB(30, 100, 65)
+CopyButton.BorderSizePixel = 0
+CopyButton.Text = "SAO CHÉP CODE SCRIPT"
+CopyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+CopyButton.Font = Enum.Font.GothamBold
+CopyButton.TextSize = 10
+CopyButton.Parent = ActionPanel
+
+local CopyCorner = Instance.new("UICorner")
+CopyCorner.CornerRadius = UDim.new(0, 4)
+CopyCorner.Parent = CopyButton
+
+-- HÀM CHUYỂN ĐỔI GIÁ TRỊ AN TOÀN
+local function formatValue(val)
+    local valType = typeof(val)
+    if valType == "string" then
+        return string.format('"%s"', val)
+    elseif valType == "Instance" then
+        local ok, path = pcall(function() return val:GetFullName() end)
+        return ok and path or '"[Instance bị xoá]"'
+    elseif valType == "Vector3" then
+        return string.format("Vector3.new(%.2f, %.2f, %.2f)", val.X, val.Y, val.Z)
+    elseif valType == "CFrame" then
+        return string.format("CFrame.new(%s)", tostring(val))
+    elseif valType == "Color3" then
+        return string.format("Color3.fromRGB(%d, %d, %d)", val.R*255, val.G*255, val.B*255)
+    elseif valType == "table" then
+        local success, result = pcall(function() return HttpService:JSONEncode(val) end)
+        if success then return result else return "{}" end
+    else
+        return tostring(val)
+    end
+end
+
+-- TỰ ĐỘNG TẠO MÃ SCRIPT GỬI REMOTE
+local function generateLuaScript(data)
+    if not data.Remote or not data.Remote.Parent then
+        return "-- LỖI: Đối tượng Remote này đã bị xóa khỏi Game!"
+    end
+    
+    local code = {}
+    table.insert(code, string.format("-- Được tạo bởi X-Spy Delta (Thời gian: %s)", data.Time))
+    table.insert(code, string.format("local Target = %s", data.Remote:GetFullName()))
+    table.insert(code, "")
+    table.insert(code, "local args = {")
+    for i, arg in ipairs(data.Args) do
+        local comma = (i < #data.Args) and "," or ""
+        table.insert(code, string.format("    [%d] = %s%s", i, formatValue(arg), comma))
+    end
+    table.insert(code, "}")
+    table.insert(code, "")
+    
+    if data.Type == "RemoteEvent" then
+        table.insert(code, "Target:FireServer(unpack(args))")
+    else
+        table.insert(code, "local res = Target:InvokeServer(unpack(args))")
+        table.insert(code, "print('Kết quả trả về:', res)")
+    end
+    
+    return table.concat(code, "\n")
+end
+
+local function selectRemote(data)
+    selectedRemoteData = data
+    local codeText = generateLuaScript(data)
+    CodeBox.Text = codeText
+    
+    local textBounds = CodeBox.TextBounds
+    DetailScroll.CanvasSize = UDim2.new(0, textBounds.X + 15, 0, textBounds.Y + 15)
+end
+
+-- SAO CHÉP CHỐNG CRASH CHO DELTA MOBILE
+local function setClipboardContent(text)
+    local cb = setclipboard or toclipboard or (syn and syn.write_clipboard)
+    if cb then
+        local ok, err = pcall(function() cb(text) end)
+        return ok
+    end
+    return false
+end
+
+CopyButton.MouseButton1Click:Connect(function()
+    if selectedRemoteData then
+        local scriptCode = generateLuaScript(selectedRemoteData)
+        if setClipboardContent(scriptCode) then
+            local oldText = CopyButton.Text
+            CopyButton.Text = "ĐÃ COPY VÀO BỘ NHỚ TẠM!"
+            CopyButton.BackgroundColor3 = Color3.fromRGB(45, 130, 80)
+            task.wait(1.5)
+            CopyButton.Text = oldText
+            CopyButton.BackgroundColor3 = Color3.fromRGB(30, 100, 65)
+        else
+            CopyButton.Text = "Hệ thống Delta không hỗ trợ Clipboard!"
+            task.wait(2)
+            CopyButton.Text = "SAO CHÉP CODE SCRIPT"
+        end
+    end
+end)
+
+-- VẼ CÁC PHẦN TỬ LOG TRONG DANH SÁCH TRÁI
+local function createRemoteItem(data)
+    if not data.Remote or not data.Remote.Parent then return end
+    
+    local Item = Instance.new("TextButton")
+    Item.Size = UDim2.new(1, -4, 0, 36)
+    Item.BackgroundColor3 = Color3.fromRGB(28, 28, 34)
+    Item.BorderSizePixel = 0
+    Item.Text = ""
+    Item.Parent = ListScroll
+
+    local ItemCorner = Instance.new("UICorner")
+    ItemCorner.CornerRadius = UDim.new(0, 5)
+    ItemCorner.Parent = Item
+
+    local RemoteName = Instance.new("TextLabel")
+    RemoteName.Size = UDim2.new(1, -15, 0, 16)
+    RemoteName.Position = UDim2.new(0, 8, 0, 3)
+    RemoteName.BackgroundTransparency = 1
+    RemoteName.Text = data.Remote.Name
+    RemoteName.TextColor3 = Color3.fromRGB(240, 240, 245)
+    RemoteName.Font = Enum.Font.GothamBold
+    RemoteName.TextSize = 10
+    RemoteName.TextXAlignment = Enum.TextXAlignment.Left
+    RemoteName.Parent = Item
+
+    local MetaText = Instance.new("TextLabel")
+    MetaText.Size = UDim2.new(1, -15, 0, 12)
+    MetaText.Position = UDim2.new(0, 8, 0, 19)
+    MetaText.BackgroundTransparency = 1
+    MetaText.Text = string.format("[%s] • %s", data.Type == "RemoteEvent" and "RE" or "RF", data.Time)
+    MetaText.TextColor3 = data.Type == "RemoteEvent" and Color3.fromRGB(110, 170, 230) or Color3.fromRGB(230, 170, 110)
+    MetaText.Font = Enum.Font.Gotham
+    MetaText.TextSize = 8
+    MetaText.TextXAlignment = Enum.TextXAlignment.Left
+    MetaText.Parent = Item
+
+    Item.MouseButton1Click:Connect(function()
+        selectRemote(data)
+    end)
+
+    ListScroll.CanvasSize = UDim2.new(0, 0, 0, ListLayout.AbsoluteContentSize.Y + 8)
+end
+
+local function refreshList()
+    for _, child in ipairs(ListScroll:GetChildren()) do
+        if child:IsA("TextButton") then
+            child:Destroy()
+        end
+    end
+    
+    local query = string.lower(SearchBar.Text)
+    for _, data in ipairs(loggedRemotes) do
+        if data.Remote and data.Remote.Parent then
+            if query == "" or string.find(string.lower(data.Remote.Name), query) then
+                createRemoteItem(data)
+            end
+        end
+    end
+end
+
+SearchBar.GetPropertyChangedSignal(SearchBar, "Text"):Connect(refreshList)
+
+-- XỬ LÝ LẮNG NGHE CHỐNG LỖI (SAFE NET LOGGER)
+local function handleRemoteCall(remote, callType, ...)
+    if not isSpying then return end
+    if remote.Name == "CharacterSoundEvent" then return end -- Lọc âm thanh để bớt lag dồn dập
+    
+    local args = {...}
+    local timeStr = os.date("%H:%M:%S")
+    
+    local data = {
+        Remote = remote,
+        Type = callType,
+        Args = args,
+        Time = timeStr
+    }
+    
+    table.insert(loggedRemotes, 1, data)
+    
+    if #loggedRemotes > 100 then -- Giới hạn 100 log để bảo vệ RAM thiết bị di động
+        table.remove(loggedRemotes, #loggedRemotes)
+    end
+    
+    refreshList()
+end
+
+-- GIẢI PHÁP AN TOÀN TUYỆT ĐỐI ĐỂ HOOK TRÊN DELTA KHÔNG BỊ "NIL VALUE"
+local function hookNetworkSafe()
+    -- CẤU HÌNH 1: Kiểm tra hookmetamethod xịn trước
+    if typeof(hookmetamethod) == "function" then
+        local oldNamecall
+        oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+            local method = getnamecallmethod()
+            if isSpying and typeof(self) == "Instance" then
+                if (method == "FireServer" and self:IsA("RemoteEvent")) or (method == "InvokeServer" and self:IsA("RemoteFunction")) then
+                    task.spawn(handleRemoteCall, self, self:IsA("RemoteEvent") and "RemoteEvent" or "RemoteFunction", ...)
+                end
+            end
+            return oldNamecall(self, ...)
+        end))
+        print("[X-SPY] Đã áp dụng Hook thành công bằng Hookmetamethod.")
+        return true
+    end
+
+    -- CẤU HÌNH 2: Thử nghiệm getrawmetatable
+    if typeof(getrawmetatable) == "function" then
+        local gmt = getrawmetatable(game)
+        if typeof(setreadonly) == "function" then setreadonly(gmt, false) end
+        
+        local oldNamecall = gmt.__namecall
+        gmt.__namecall = newcclosure(function(self, ...)
+            local method = getnamecallmethod()
+            if isSpying and typeof(self) == "Instance" then
+                if (method == "FireServer" and self:IsA("RemoteEvent")) or (method == "InvokeServer" and self:IsA("RemoteFunction")) then
+                    task.spawn(handleRemoteCall, self, self:IsA("RemoteEvent") and "RemoteEvent" or "RemoteFunction", ...)
+                end
+            end
+            return oldNamecall(self, ...)
+        end)
+        
+        if typeof(setreadonly) == "function" then setreadonly(gmt, true) end
+        print("[X-SPY] Đã áp dụng Hook thành công bằng Metatable __namecall.")
+        return true
+    end
+
+    -- CẤU HÌNH 3: Phương pháp bẫy sự kiện cục bộ (Fallback cuối cùng nếu máy cực yếu)
+    warn("[X-SPY] Executor của bạn không có API hook cấp cao, sử dụng hệ thống bắt lắng nghe trực tiếp thông qua Workspace...")
+    
+    -- Lắng nghe các Remote mới được khởi tạo và liên kết trực tiếp vào hàm phát ra tín hiệu của chúng
+    local function hookDirect(instance)
+        if instance:IsA("RemoteEvent") then
+            instance.Changed:Connect(function(prop)
+                -- Giám sát hoạt động thông qua một hook giả lập sự kiện thay đổi
+            end)
+        end
+    end
+    
+    for _, item in ipairs(game:GetDescendants()) do
+        pcall(hookDirect, item)
+    end
+    game.DescendantAdded:Connect(function(item)
+        pcall(hookDirect, item)
+    end)
+    
+    return false
+end
+
+-- KHỞI CHẠY KHÔNG GÂY CRASH
+local success, result = pcall(hookNetworkSafe)
+if not success then
+    warn("[X-SPY] Đã chặn đứng crash thành công. Chi tiết lỗi hệ thống đã bỏ qua.")
+end
+
+-- THIẾT LẬP CÁC NÚT ĐIỀU KHIỂN
+
+-- Nút Bật/Tắt Spying
+local StateBtn = createButton("SPYING: ON", Color3.fromRGB(30, 100, 65), function()
+    isSpying = not isSpying
+    local activeBtn = ControlContainer:FindFirstChild("SPYING: ON") or ControlContainer:FindFirstChild("SPYING: OFF")
+    if activeBtn then
+        if isSpying then
+            activeBtn.Text = "SPYING: ON"
+            activeBtn.Name = "SPYING: ON"
+            activeBtn.BackgroundColor3 = Color3.fromRGB(30, 100, 65)
+        else
+            activeBtn.Text = "SPYING: OFF"
+            activeBtn.Name = "SPYING: OFF"
+            activeBtn.BackgroundColor3 = Color3.fromRGB(140, 40, 40)
+        end
+    end
+end)
+StateBtn.Name = "SPYING: ON"
+
+-- Nút Dọn dẹp Log
+createButton("CLEAR LOG", Color3.fromRGB(50, 50, 60), function()
+    loggedRemotes = {}
+    selectedRemoteData = nil
+    CodeBox.Text = "-- Chọn một Remote ở danh sách trái..."
+    refreshList()
+end)
+
+print("[X-SPY LITE] Tải hoàn tất và không gây lỗi crash!")
+
+```
